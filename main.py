@@ -97,13 +97,7 @@ def create_task(payload: TaskCreate):
     title = payload.title.strip()
     if not title:
         return bad_request("Title must not be empty")
-    task = {
-        "id": max((t["id"] for t in tasks), default=0) + 1,
-        "title": title,
-        "done": False,
-    }
-    tasks.append(task)
-    return task
+    return database.create_task(title)
 
 
 @app.put("/tasks/{task_id}", tags=["Tasks"], summary="Replace task fields", responses=ERRORS)

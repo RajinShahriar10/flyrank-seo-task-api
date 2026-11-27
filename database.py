@@ -76,3 +76,15 @@ def get_task(task_id: int) -> dict | None:
             "SELECT id, title, done FROM tasks WHERE id = ?", (task_id,)
         ).fetchone()
     return row_to_task(row) if row else None
+
+
+def create_task(title: str) -> dict:
+    """INSERT a new row and return it. SQLite assigns the next free id."""
+    with closing(connect()) as connection, connection:
+        cursor = connection.execute(
+            "INSERT INTO tasks (title, done) VALUES (?, 0)", (title,)
+        )
+        row = connection.execute(
+            "SELECT id, title, done FROM tasks WHERE id = ?", (cursor.lastrowid,)
+        ).fetchone()
+    return row_to_task(row)
