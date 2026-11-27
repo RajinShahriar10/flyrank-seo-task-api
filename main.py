@@ -9,11 +9,17 @@ app = FastAPI(
     version="1.0.0",
 )
 
-tasks = [
-    {"id": 1, "title": "Audit /pricing for broken links", "done": False},
-    {"id": 2, "title": "Generate sitemap for /blog", "done": True},
-    {"id": 3, "title": "Check meta titles on /docs", "done": False},
-]
+
+def seed_tasks():
+    """Fresh copies of the three demo jobs — also used by POST /reset."""
+    return [
+        {"id": 1, "title": "Audit /pricing for broken links", "done": False},
+        {"id": 2, "title": "Generate sitemap for /blog", "done": True},
+        {"id": 3, "title": "Check meta titles on /docs", "done": False},
+    ]
+
+
+tasks = seed_tasks()
 
 
 class TaskCreate(BaseModel):
@@ -64,10 +70,23 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/tasks", tags=["Tasks"], summary="List all tasks")
-def list_tasks():
-    """Return every task in the in-memory list."""
-    return tasks
+@app.get("/tasks", tags=["Tasks"], summary="List, filter and paginate tasks", responses=ERRORS)
+def list_tasks(done: bool | None = None, search: str | None = None, limit: int | None = None, offset: int = 0):
+    """Return tasks, optionally filtered by `done`, `search`, `limit` and `offset`."""
+    if limit is not None and limit < 1:
+        return bad_request("limit must be at least 1")
+    if offset < 0:
+        return bad_request("offset must be 0 or greater")
+    result = tasks
+    if done is not None:
+        result = [task for task in result if task["done"] is done]
+    if search:
+        needle = search.lower()
+        result = [task for task in result if needle in task["title"].lower()]
+    result = result[offset:]
+    if limit is not None:
+        result = result[:limit]
+    return result
 
 
 @app.get("/tasks/{task_id}", tags=["Tasks"], summary="Get one task", responses=ERRORS)
@@ -121,3 +140,18 @@ def delete_task(task_id: int):
         return not_found(task_id)
     tasks.remove(task)
     return Response(status_code=204)
+
+
+@app.get("/stats", tags=["Extras"], summary="Count tasks")
+def stats():
+    """Return total, done and open counts computed by the server."""
+    done = sum(1 for task in tasks if task["done"])
+    return {"total": len(tasks), "done": done, "open": len(tasks) - done}
+
+
+@app.post("/reset", tags=["Extras"], summary="Restore demo tasks")
+def reset():
+    """Clear the list and restore the three seeded jobs — handy for demos."""
+    tasks.clear()
+    tasks.extend(seed_tasks())
+    return {"message": "Demo tasks restored", "count": len(tasks)}
