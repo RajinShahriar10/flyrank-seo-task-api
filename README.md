@@ -55,6 +55,8 @@ The full cycle — create (`201`), update (`200`), delete (`204`), unknown id (`
 
 ![Swagger UI showing all Task API endpoints](docs/swagger.png)
 
+The full CRUD cycle was also driven through **Try it out** in a real browser: create `201` → list `200` → update `200` → delete `204` → list `200`, with no curl involved.
+
 OpenAPI JSON (generated from the route signatures and docstrings) is served at `/openapi.json`.
 
 ## The mortality experiment
@@ -65,7 +67,7 @@ I created a task, stopped the server with `Ctrl+C`, restarted it, and called `GE
 
 - **CRUD contract, not a toy:** nine documented endpoints with honest status codes and a consistent JSON error shape.
 - **Input is untrusted:** strict Pydantic types, empty-title rejection, a custom `422 → 400` handler, and optional-field checks on `PUT`.
-- **Query design:** filtering, case-insensitive search and offset/limit pagination, plus a server-computed `/stats` endpoint. Real APIs don't return "everything".
+- **Query design:** filtering, case-insensitive search and offset/limit pagination, plus a server-computed `/stats` endpoint. Real APIs never return "everything": a single unbounded `GET` on a production table could ship millions of rows, blowing up response time, server memory and the client's parse cost. `limit`/`offset` make the payload bounded and predictable, and force the server to do the filtering instead of the client.
 - **Self-describing API:** generated OpenAPI, Swagger UI, and six pytest tests that run in under a second.
 - **AI engineering, not just AI usage:** the "AI vs me" section below records a written specification, a competing implementation and a diff — the review loop matters more than the generated code.
 
