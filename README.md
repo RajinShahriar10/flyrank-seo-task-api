@@ -40,7 +40,11 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 ```
 
-Three example jobs are inserted **only when the table is empty** — restarting five times still gives three rows, not fifteen. `created_at` / `updated_at` are stored for every task but deliberately not exposed, so the JSON responses stay byte-for-byte identical to Week 2.
+Three example jobs are inserted **only when the table is empty** — restarting five times still gives three rows, not fifteen. The three inserts run inside the connection's transaction and commit together when the `with connection` block exits, so a crash mid-seed cannot leave a half-seeded table.
+
+`created_at` / `updated_at` are stored for every task but deliberately not exposed, so the JSON responses stay byte-for-byte identical to Week 2. Adding those columns meant changing the table's shape — that uneasy "what if existing rows break?" feeling is exactly why real teams write **migrations** instead of editing tables by hand. `CREATE TABLE IF NOT EXISTS` plus `CREATE INDEX IF NOT EXISTS` here are the simplest possible migration.
+
+Two indexes are created on first run: `idx_tasks_done` for `WHERE done = ?` and `idx_tasks_title` for title lookups/ordering. An index is a sorted side-structure that lets SQLite find matching rows without scanning the whole table. Be honest about its limits: a leading-wildcard `LIKE '%term%'` still scans, while equality on `done` benefits directly.
 
 ## Endpoints (unchanged from Week 2)
 
@@ -82,6 +86,8 @@ Create two tasks, stop the server with `Ctrl+C`, start it again, and `GET /tasks
 
 `main.py` contains **no SQL** — it validates input and calls functions in `database.py`. `database.py` owns connections, the schema, seeding and every query, and converts SQLite rows back into the exact JSON shape the API promised. Swapping SQLite for PostgreSQL later means rewriting one module, not the routes.
 
+The Week 2 endpoint tests still pass **unchanged** against this version (plus three new persistence/SQL tests). Identical requests producing identical statuses and bodies while the assertions stay untouched is the proof that storage is just an implementation detail behind the API.
+
 ![Swagger UI showing the unchanged endpoint list](docs/swagger.png)
 
 ## Exploring the database
@@ -101,4 +107,4 @@ SELECT * FROM tasks WHERE done = 1;
 
 ## Commit trail
 
-`Stage 0: create SQLite database` → `Stage 1: database read endpoints` → `Stage 2: insert into database` → `Stage 3: update and delete with SQL` → `Stage 4: explored SQLite` → `Stage 5: database documentation`. The repository also contains the full Week 2 history, so you can see the before/after of the storage swap in git.
+`Stage 0: create SQLite database` → `Stage 1: database read endpoints` → `Stage 2: insert into database` → `Stage 3: update and delete with SQL` → `Stage 4: explored SQLite` → `Stage 5: database documentation`, plus `Extras: SQL indexes and migration notes` for the stretch goals. The repository also contains the full Week 2 history, so you can see the before/after of the storage swap in git.

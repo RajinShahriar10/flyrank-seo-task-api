@@ -37,6 +37,8 @@ def init_db() -> None:
             )
             """
         )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_tasks_done ON tasks(done)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_tasks_title ON tasks(title)")
         count = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
         if count == 0:
             connection.executemany(
