@@ -1,5 +1,7 @@
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 app = FastAPI()
 
@@ -10,11 +12,27 @@ tasks = [
 ]
 
 
+class TaskCreate(BaseModel):
+    title: str
+
+
+def bad_request(message: str) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"error": message})
+
+
 def not_found(task_id: int) -> JSONResponse:
     return JSONResponse(
         status_code=404,
         content={"error": f"Task {task_id} not found"},
     )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request, exc):
+    message = "Invalid request body"
+    if exc.errors():
+        message = f"Invalid request body: {exc.errors()[0]['msg']}"
+    return bad_request(message)
 
 
 @app.get("/")
@@ -42,3 +60,17 @@ def get_task(task_id: int):
         if task["id"] == task_id:
             return task
     return not_found(task_id)
+
+
+@app.post("/tasks", status_code=201)
+def create_task(payload: TaskCreate):
+    title = payload.title.strip()
+    if not title:
+        return bad_request("Title must not be empty")
+    task = {
+        "id": max((t["id"] for t in tasks), default=0) + 1,
+        "title": title,
+        "done": False,
+    }
+    tasks.append(task)
+    return task
