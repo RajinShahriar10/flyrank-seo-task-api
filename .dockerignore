@@ -1,0 +1,13 @@
+.git
+.gitignore
+.env
+*.db
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest_cache
+tests/
+ai-version/
+docs/
+FlyRank Internship Backend W2/
+FlyRank Internship Backend W3/

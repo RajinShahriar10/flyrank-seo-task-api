@@ -3,11 +3,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-import database
+from repository import database
 
 app = FastAPI(
     title="Task API",
-    description="CRUD API for SEO audit jobs backed by SQLite. The API contract is identical to the Week 2 in-memory version; only the storage layer changed.",
+    description="CRUD API for SEO audit jobs. Storage is selected by repository.py (SQLite locally, Postgres in Docker); routes are unchanged from A2.",
     version="1.0.0",
 )
 
