@@ -3,7 +3,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-app = FastAPI()
+app = FastAPI(
+    title="Task API",
+    description="In-memory CRUD API for SEO audit jobs. Storage is a list in this file: data is lost on restart.",
+    version="1.0.0",
+)
 
 tasks = [
     {"id": 1, "title": "Audit /pricing for broken links", "done": False},
@@ -13,12 +17,18 @@ tasks = [
 
 
 class TaskCreate(BaseModel):
-    title: str = Field(strict=True)
+    title: str = Field(strict=True, description="Non-empty task title")
 
 
 class TaskUpdate(BaseModel):
-    title: str | None = Field(default=None, strict=True)
-    done: bool | None = Field(default=None, strict=True)
+    title: str | None = Field(default=None, strict=True, description="Replacement title")
+    done: bool | None = Field(default=None, strict=True, description="Completion flag")
+
+
+ERRORS = {
+    400: {"description": "Invalid request body", "content": {"application/json": {"example": {"error": "Title must not be empty"}}}},
+    404: {"description": "Task not found", "content": {"application/json": {"example": {"error": "Task 99 not found"}}}},
+}
 
 
 def bad_request(message: str) -> JSONResponse:
@@ -26,10 +36,7 @@ def bad_request(message: str) -> JSONResponse:
 
 
 def not_found(task_id: int) -> JSONResponse:
-    return JSONResponse(
-        status_code=404,
-        content={"error": f"Task {task_id} not found"},
-    )
+    return JSONResponse(status_code=404, content={"error": f"Task {task_id} not found"})
 
 
 def find_task(task_id: int):
@@ -38,39 +45,41 @@ def find_task(task_id: int):
 
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request, exc):
+    """Turn FastAPI's default 422 into the API's documented 400 error shape."""
     message = "Invalid request body"
     if exc.errors():
         message = f"Invalid request body: {exc.errors()[0]['msg']}"
     return bad_request(message)
 
 
-@app.get("/")
+@app.get("/", tags=["Meta"], summary="Describe this API")
 def describe_api():
-    return {
-        "name": "Task API",
-        "version": "1.0",
-        "endpoints": ["/tasks"],
-    }
+    """Return the API name, version and its main endpoint."""
+    return {"name": "Task API", "version": "1.0", "endpoints": ["/tasks"]}
 
 
-@app.get("/health")
+@app.get("/health", tags=["Meta"], summary="Health check")
 def health():
+    """Return 200 while the server is alive — used by uptime monitors."""
     return {"status": "ok"}
 
 
-@app.get("/tasks")
+@app.get("/tasks", tags=["Tasks"], summary="List all tasks")
 def list_tasks():
+    """Return every task in the in-memory list."""
     return tasks
 
 
-@app.get("/tasks/{task_id}")
+@app.get("/tasks/{task_id}", tags=["Tasks"], summary="Get one task", responses=ERRORS)
 def get_task(task_id: int):
+    """Return a task by id, or 404 when the id does not exist."""
     task = find_task(task_id)
     return task if task else not_found(task_id)
 
 
-@app.post("/tasks", status_code=201)
+@app.post("/tasks", tags=["Tasks"], summary="Create a task", status_code=201, responses=ERRORS)
 def create_task(payload: TaskCreate):
+    """Create a task with the next free id and `done: false`; returns 201."""
     title = payload.title.strip()
     if not title:
         return bad_request("Title must not be empty")
@@ -83,8 +92,9 @@ def create_task(payload: TaskCreate):
     return task
 
 
-@app.put("/tasks/{task_id}")
+@app.put("/tasks/{task_id}", tags=["Tasks"], summary="Replace task fields", responses=ERRORS)
 def update_task(task_id: int, payload: TaskUpdate):
+    """Update the supplied title and/or done fields; at least one is required."""
     task = find_task(task_id)
     if not task:
         return not_found(task_id)
@@ -103,8 +113,9 @@ def update_task(task_id: int, payload: TaskUpdate):
     return task
 
 
-@app.delete("/tasks/{task_id}", status_code=204)
+@app.delete("/tasks/{task_id}", tags=["Tasks"], summary="Delete a task", status_code=204, responses=ERRORS)
 def delete_task(task_id: int):
+    """Remove a task and return 204 with an empty body, or 404 if unknown."""
     task = find_task(task_id)
     if not task:
         return not_found(task_id)
