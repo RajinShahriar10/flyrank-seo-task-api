@@ -88,3 +88,13 @@ def test_seeding_happens_only_once():
     database.init_db()
     database.init_db()
     assert len(client.get("/tasks").json()) == 3
+
+
+def test_external_sql_write_is_visible_to_api():
+    """Stage 4: a committed write from a SQLite viewer shows up through the API."""
+    reset()
+    with sqlite3.connect(database.DB_PATH) as connection:
+        connection.execute("UPDATE tasks SET done = 1 WHERE id = 1")
+        connection.commit()
+    assert client.get("/tasks/1").json()["done"] is True
+    assert client.get("/stats").json() == {"total": 3, "done": 2, "open": 1}
