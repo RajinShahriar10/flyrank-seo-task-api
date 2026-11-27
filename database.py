@@ -43,3 +43,36 @@ def init_db() -> None:
                 "INSERT INTO tasks (id, title, done) VALUES (?, ?, ?)",
                 SEED_TASKS,
             )
+
+
+def row_to_task(row: sqlite3.Row) -> dict:
+    """Convert a database row into the exact JSON shape the API promised."""
+    return {"id": row["id"], "title": row["title"], "done": bool(row["done"])}
+
+
+def list_tasks(done: bool | None, search: str | None, limit: int | None, offset: int) -> list[dict]:
+    """SELECT tasks, filtering in SQL rather than in Python."""
+    sql = "SELECT id, title, done FROM tasks"
+    clauses: list[str] = []
+    params: list = []
+    if done is not None:
+        clauses.append("done = ?")
+        params.append(int(done))
+    if search:
+        clauses.append("title LIKE ?")
+        params.append(f"%{search}%")
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY id LIMIT ? OFFSET ?"
+    params.extend([limit if limit is not None else -1, offset])
+    with closing(connect()) as connection, connection:
+        return [row_to_task(row) for row in connection.execute(sql, params).fetchall()]
+
+
+def get_task(task_id: int) -> dict | None:
+    """SELECT one task, or return None when the id does not exist."""
+    with closing(connect()) as connection, connection:
+        row = connection.execute(
+            "SELECT id, title, done FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+    return row_to_task(row) if row else None

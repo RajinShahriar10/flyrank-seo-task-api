@@ -3,7 +3,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from database import init_db
+import database
 
 app = FastAPI(
     title="Task API",
@@ -11,7 +11,7 @@ app = FastAPI(
     version="1.0.0",
 )
 
-init_db()
+database.init_db()
 
 
 def seed_tasks():
@@ -81,22 +81,13 @@ def list_tasks(done: bool | None = None, search: str | None = None, limit: int |
         return bad_request("limit must be at least 1")
     if offset < 0:
         return bad_request("offset must be 0 or greater")
-    result = tasks
-    if done is not None:
-        result = [task for task in result if task["done"] is done]
-    if search:
-        needle = search.lower()
-        result = [task for task in result if needle in task["title"].lower()]
-    result = result[offset:]
-    if limit is not None:
-        result = result[:limit]
-    return result
+    return database.list_tasks(done, search, limit, offset)
 
 
 @app.get("/tasks/{task_id}", tags=["Tasks"], summary="Get one task", responses=ERRORS)
 def get_task(task_id: int):
     """Return a task by id, or 404 when the id does not exist."""
-    task = find_task(task_id)
+    task = database.get_task(task_id)
     return task if task else not_found(task_id)
 
 
