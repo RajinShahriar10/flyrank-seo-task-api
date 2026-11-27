@@ -3,11 +3,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from database import init_db
+
 app = FastAPI(
     title="Task API",
     description="In-memory CRUD API for SEO audit jobs. Storage is a list in this file: data is lost on restart.",
     version="1.0.0",
 )
+
+init_db()
 
 
 def seed_tasks():
