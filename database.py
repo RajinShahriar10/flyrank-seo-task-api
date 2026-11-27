@@ -88,3 +88,57 @@ def create_task(title: str) -> dict:
             "SELECT id, title, done FROM tasks WHERE id = ?", (cursor.lastrowid,)
         ).fetchone()
     return row_to_task(row)
+
+
+def update_task(task_id: int, title: str | None, done: bool | None) -> dict | None:
+    """UPDATE the supplied columns, then read the row back. None means unknown id."""
+    columns: list[str] = []
+    values: list = []
+    if title is not None:
+        columns.append("title = ?")
+        values.append(title)
+    if done is not None:
+        columns.append("done = ?")
+        values.append(int(done))
+    columns.append("updated_at = CURRENT_TIMESTAMP")
+    values.append(task_id)
+    with closing(connect()) as connection, connection:
+        cursor = connection.execute(
+            f"UPDATE tasks SET {', '.join(columns)} WHERE id = ?", values
+        )
+        if not cursor.rowcount:
+            return None
+        row = connection.execute(
+            "SELECT id, title, done FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+    return row_to_task(row)
+
+
+def delete_task(task_id: int) -> bool:
+    """DELETE one row; False means the id did not exist."""
+    with closing(connect()) as connection, connection:
+        cursor = connection.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    return cursor.rowcount > 0
+
+
+def stats() -> dict:
+    """Ask SQLite to COUNT instead of counting rows in Python."""
+    with closing(connect()) as connection, connection:
+        row = connection.execute(
+            """SELECT COUNT(*) AS total,
+                      SUM(CASE WHEN done = 1 THEN 1 ELSE 0 END) AS done
+               FROM tasks"""
+        ).fetchone()
+    total = row["total"]
+    done = row["done"] or 0
+    return {"total": total, "done": done, "open": total - done}
+
+
+def reset() -> int:
+    """Delete every row and restore the three seeded jobs on the first ids."""
+    with closing(connect()) as connection, connection:
+        connection.execute("DELETE FROM tasks")
+        connection.executemany(
+            "INSERT INTO tasks (id, title, done) VALUES (?, ?, ?)", SEED_TASKS
+        )
+    return len(SEED_TASKS)

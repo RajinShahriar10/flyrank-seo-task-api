@@ -1,5 +1,8 @@
+import sqlite3
+
 from fastapi.testclient import TestClient
 
+import database
 from main import app
 
 client = TestClient(app)
@@ -68,3 +71,20 @@ def test_extras():
     assert [t["id"] for t in client.get("/tasks", params={"limit": 2, "offset": 1}).json()] == [2, 3]
     assert client.get("/stats").json() == {"total": 3, "done": 1, "open": 2}
     assert client.get("/tasks", params={"limit": 0}).status_code == 400
+
+
+def test_data_survives_restart():
+    """Re-running init_db() is what a server restart does; rows must remain."""
+    reset()
+    created = client.post("/tasks", json={"title": "Survives restart"}).json()
+    database.init_db()
+    assert client.get(f"/tasks/{created['id']}").json() == created
+    with sqlite3.connect(database.DB_PATH) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 4
+
+
+def test_seeding_happens_only_once():
+    reset()
+    database.init_db()
+    database.init_db()
+    assert len(client.get("/tasks").json()) == 3
