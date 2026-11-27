@@ -1,110 +1,127 @@
-# SEO Audit Task Queue — SQLite-backed Task API
+# SEO Audit Task Queue — Postgres in Docker
 
-**FlyRank Backend AI Engineering · W3/A1 (BE-02)** — the Week 2 CRUD API with one thing changed: the in-memory list is gone. Tasks now live in a SQLite database, so they survive server restarts.
-
-This is the whole point of the assignment: **the API contract did not change at all.** Same URLs, same request bodies, same response bodies and status codes. Only the storage layer was replaced.
+**FlyRank Backend AI Engineering · A3 (BE-04)** — the A2 task API with its storage swapped once more: SQLite file → Postgres container. The routes, validation and JSON contract are the ones from A1/A2; only the repository underneath changed.
 
 ```
-Week 2:  Client → API → Python list in memory   (data dies with the process)
-Week 3:  Client → API → SQLite file tasks.db    (data survives restarts)
+A1: Client → FastAPI → Python list        (dies on restart)
+A2: Client → FastAPI → SQLite tasks.db    (survives process restart)
+A3: Client → FastAPI → Postgres in Docker (survives app + container restart)
 ```
 
-## Why SQLite
+## The architecture claim, honestly
 
-- **Zero setup** — it is a single file and ships with Python's standard library (`sqlite3`), so no server to install, configure or run.
-- **Perfect fit for a local internship project** — the database is created automatically on first start and can be inspected or edited directly.
-- **Real SQL, real persistence** — `SELECT`, `INSERT`, `UPDATE`, `DELETE` and transactions behave the same way as in PostgreSQL/MySQL. When this project moves to a bigger database later, only `database.py` needs to change.
+`main.py` contains **no storage code and no SQL**. In A2 it did `import database`; now it does `from repository import database`. That is the only functional line that changed — plus the Swagger description string. Every route body is byte-for-byte the A2 version.
 
-## How to run
+`repository.py` is the single wiring point:
 
-```bash
-python -m pip install -r requirements.txt
-python -m uvicorn main:app --reload
+```python
+if os.getenv("STORAGE_BACKEND", "sqlite").lower() == "postgres":
+    import postgres_repository as database
+else:
+    import database
 ```
 
-One documented start command: **`python -m uvicorn main:app --reload`** → open http://localhost:8000/docs.
+`postgres_repository.py` implements the **same public functions** as the SQLite `database.py`, so the routes keep calling `database.list_tasks(...)`, `database.create_task(...)`, etc.:
 
-Run the checks with `python -m pytest -q` (9 tests).
+| Interface | SQLite (A2) | Postgres (A3) |
+| --- | --- | --- |
+| `init_db()` | `CREATE TABLE IF NOT EXISTS` | executes `db/init.sql` |
+| `list_tasks(done, search, limit, offset)` | `WHERE`, `LIKE`, `LIMIT/OFFSET` | `WHERE`, `ILIKE`, `LIMIT/OFFSET` |
+| `get_task(id)` | `SELECT ... WHERE id = ?` | `SELECT ... WHERE id = %s` |
+| `create_task(title)` | `INSERT` + `lastrowid` | `INSERT ... RETURNING` |
+| `update_task(id, title, done)` | dynamic partial `UPDATE` | same, with `RETURNING` |
+| `delete_task(id)` | rowcount | rowcount |
+| `stats()` / `reset()` | `COUNT` / reseed | `COUNT FILTER` / reseed + `setval` |
 
-### Where the database lives
+All user-supplied values go through `?` (SQLite) or `%s` (Postgres) placeholders. Nothing is string-glued into a query.
 
-`tasks.db` in the project root. It is created automatically if missing, is deliberately gitignored, and can be moved by setting `TASKS_DB_PATH`. On first run the app creates:
+## Files added for A3
 
-```sql
-CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY,
-    title TEXT NOT NULL,
-    done INTEGER NOT NULL CHECK (done IN (0, 1)),
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+| File | Purpose |
+| --- | --- |
+| `postgres_repository.py` | Postgres implementation of the A2 repository interface |
+| `repository.py` | Picks SQLite or Postgres from `STORAGE_BACKEND` |
+| `db/init.sql` | The one schema file: table, two indexes, first-run seeds, sequence fix |
+| `.env.example` | Committed template; real `.env` is gitignored |
+| `Dockerfile` | App image (`python:3.12-slim`) |
+| `docker-compose.yml` | `db` (Postgres + named volume), `app`, optional `cache` (Redis) |
+| `cache.py` | Optional Redis `PING` at startup; never fatal |
+| `scripts/explain_index.py` | Stretch: `EXPLAIN ANALYZE` before/after an index |
+| `pytest.ini` | Keeps tests scoped to the root `tests/` folder |
+
+## Run the whole stack
+
+Docker Desktop is required (see [install steps](#install-docker-if-not-present)). Then, from this folder:
+
+```cmd
+copy .env.example .env
+docker compose up --build -d
 ```
 
-Three example jobs are inserted **only when the table is empty** — restarting five times still gives three rows, not fifteen. The three inserts run inside the connection's transaction and commit together when the `with connection` block exits, so a crash mid-seed cannot leave a half-seeded table.
+Open http://localhost:8000/docs. The Postgres service is healthy-checked with `pg_isready`, and the app waits for it before starting. `STORAGE_BACKEND=postgres` and `DATABASE_URL` come from `.env`; the hostname `db` is the compose service name.
 
-`created_at` / `updated_at` are stored for every task but deliberately not exposed, so the JSON responses stay byte-for-byte identical to Week 2. Adding those columns meant changing the table's shape — that uneasy "what if existing rows break?" feeling is exactly why real teams write **migrations** instead of editing tables by hand. `CREATE TABLE IF NOT EXISTS` plus `CREATE INDEX IF NOT EXISTS` here are the simplest possible migration.
+### Environment
 
-Two indexes are created on first run: `idx_tasks_done` for `WHERE done = ?` and `idx_tasks_title` for title lookups/ordering. An index is a sorted side-structure that lets SQLite find matching rows without scanning the whole table. Be honest about its limits: a leading-wildcard `LIKE '%term%'` still scans, while equality on `done` benefits directly.
+`.env` is **gitignored**; `.env.example` is committed. Values:
 
-## Endpoints (unchanged from Week 2)
+| Key | Example | Used by |
+| --- | --- | --- |
+| `STORAGE_BACKEND` | `postgres` | `repository.py` swap |
+| `DATABASE_URL` | `postgresql://tasks:tasks@db:5432/tasks` | app → Postgres |
+| `POSTGRES_USER/PASSWORD/DB` | `tasks` / `tasks` / `tasks` | compose substitutes into the db container |
+| `REDIS_URL` | `redis://cache:6379/0` | optional stretch ping |
 
-| Method | Path | What it does | Success | Errors |
-| --- | --- | --- | --- | --- |
-| `GET` | `/` | API name, version, main endpoint | `200` | — |
-| `GET` | `/health` | Liveness probe | `200` | — |
-| `GET` | `/tasks` | List; SQL `WHERE done = ?`, `LIKE ?search?`, `LIMIT/OFFSET` | `200` | `400` |
-| `GET` | `/tasks/{id}` | Fetch one row | `200` | `404` |
-| `POST` | `/tasks` | `INSERT`, assign next id, `done = 0` | `201` | `400` |
-| `PUT` | `/tasks/{id}` | Partial SQL `UPDATE` of `title` and/or `done` | `200` | `400`, `404` |
-| `DELETE` | `/tasks/{id}` | SQL `DELETE`, empty body | `204` | `404` |
-| `GET` | `/stats` | Server counts via SQL `COUNT()` | `200` | — |
-| `POST` | `/reset` | Restore the three seeded rows | `200` | — |
+For a non-Docker local run against a published port, override in the shell:
+`set DATABASE_URL=postgresql://tasks:tasks@localhost:5432/tasks`
 
-Every error keeps the Week 2 shape, `{"error": "..."}`; unknown ids return `{"error": "Task 99 not found"}` so clients cannot tell the storage changed.
+## Persistence proof (app restart **and** container restart)
 
-### A real response, via curl
+Run these from the repo root after `docker compose up -d`:
 
-```console
-$ curl -i -X POST http://localhost:8000/tasks \
-    -H "Content-Type: application/json" \
-    -d '{"title":"Crawl /blog for orphan pages"}'
-
-HTTP/1.1 201 Created
-date: Fri, 27 Nov 2026 05:07:07 GMT
-server: uvicorn
-content-length: 60
-content-type: application/json
-
-{"id":4,"title":"Crawl /blog for orphan pages","done":false}
+```cmd
+curl -i -X POST http://localhost:8000/tasks -H "Content-Type: application/json" -d "{\"title\":\"Survives both restarts\"}"
+docker compose restart app
+curl -i http://localhost:8000/tasks
+docker compose down
+docker compose up -d
+curl -i http://localhost:8000/tasks
+docker compose exec db psql -U tasks -d tasks -c "SELECT id, title, done FROM tasks ORDER BY id;"
 ```
 
-### Persistence check
+The created row must appear in all three `GET /tasks` calls and in the `psql` output. `docker compose down` **keeps** the named volume `pgdata`; `docker compose down -v` deliberately deletes it and the next `up` re-seeds the three example jobs.
 
-Create two tasks, stop the server with `Ctrl+C`, start it again, and `GET /tasks`: both tasks are still there with the same ids. The same assertion is automated in `tests/test_api.py::test_data_survives_restart`.
+> Results of this run will be pasted here once Docker Desktop is installed in the working environment. The API-side assertion is already automated locally in `tests/test_api.py` (9 tests pass with the SQLite repository); the container restart check needs the live stack.
 
-## Separation of API and data layers
+## Database viewer / SQL
 
-`main.py` contains **no SQL** — it validates input and calls functions in `database.py`. `database.py` owns connections, the schema, seeding and every query, and converts SQLite rows back into the exact JSON shape the API promised. Swapping SQLite for PostgreSQL later means rewriting one module, not the routes.
-
-The Week 2 endpoint tests still pass **unchanged** against this version (plus three new persistence/SQL tests). Identical requests producing identical statuses and bodies while the assertions stay untouched is the proof that storage is just an implementation detail behind the API.
-
-![Swagger UI showing the unchanged endpoint list](docs/swagger.png)
-
-## Exploring the database
-
-Viewer: `pip install sqlite-web` then `sqlite_web tasks.db --port 8003` (or use DB Browser for SQLite). Full write-up of all five queries: [docs/sql-queries.md](docs/sql-queries.md).
-
-![sqlite-web showing the tasks table](docs/sqlite-viewer.png)
-
-One query I ran in the viewer:
-
-```sql
-SELECT * FROM tasks WHERE done = 1;
--- (2, 'Generate sitemap for /blog', 1, ...)
+```cmd
+docker compose exec db psql -U tasks -d tasks -c "SELECT * FROM tasks;"
+docker compose exec db psql -U tasks -d tasks -c "SELECT COUNT(*) FROM tasks;"
 ```
 
-`UPDATE tasks SET done = 1;` followed by `GET /stats` returned `{"total":3,"done":3,"open":0}` — the API read the external change immediately. That only worked after `connection.commit()`: uncommitted writes are invisible to other connections.
+`db/init.sql` is mounted at `/docker-entrypoint-initdb.d/init.sql`, so a fresh volume creates the table, indexes and three seeds automatically. The app also executes the same file at startup, which makes a partially initialized volume self-heal. Seeds are guarded by `WHERE NOT EXISTS (SELECT 1 FROM tasks)` and the identity sequence is set to `MAX(id)`, so example tasks never multiply and new ids never collide.
+
+## Stretch goals
+
+- **Redis:** compose starts `cache` (`redis:7-alpine`) with a healthcheck. When `REDIS_URL` is set, `cache.py` sends `PING` once at startup and logs `pong`. A missing Redis logs a warning but never blocks the API, so it stays optional.
+- **Index proof:** `scripts/explain_index.py` seeds 1,000 rows, drops `idx_tasks_done`, runs `EXPLAIN ANALYZE`, recreates the index, and runs it again. Run it after the stack is up:
+  `set DATABASE_URL=postgresql://tasks:tasks@localhost:5432/tasks && python scripts/explain_index.py`
+
+## Tests
+
+```cmd
+python -m pytest -q
+```
+
+9 tests cover the unchanged A1/A2 contract plus persistence and seeding, using an isolated SQLite file. `tests/conftest.py` forces `STORAGE_BACKEND=sqlite` so a developer's `.env` cannot make unit tests need a running Postgres.
+
+## Install Docker (if not present)
+
+1. Install WSL2 in an **elevated** PowerShell: `wsl --install`
+2. Reboot when prompted.
+3. Install Docker Desktop: `winget install --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements`
+4. Start Docker Desktop, accept the license, and confirm `docker --version` and `docker compose version` work.
 
 ## Commit trail
 
-`Stage 0: create SQLite database` → `Stage 1: database read endpoints` → `Stage 2: insert into database` → `Stage 3: update and delete with SQL` → `Stage 4: explored SQLite` → `Stage 5: database documentation`, plus `Extras: SQL indexes and migration notes` for the stretch goals. The repository also contains the full Week 2 history, so you can see the before/after of the storage swap in git.
+Previous history: A1 `hello server` → `Stage 7: AI vs me`, then A2 `Stage 0: create SQLite database` → `Extras: SQL indexes and migration notes`. A3 commits: Postgres repository and schema, Docker/compose wiring, documentation and verification. The old in-memory and SQLite snapshots are kept in archived sibling folders locally and are gitignored.
